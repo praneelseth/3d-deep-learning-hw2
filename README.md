@@ -6,8 +6,8 @@ least-squares fitting.
 
 ## Setup
 
-Python 3 with `numpy`, `scipy`, `h5py`, `matplotlib`, `scikit-learn` and
-`torch`. Place the data splits in the repository root:
+Python 3 with `numpy`, `scipy`, `h5py`, `matplotlib` and `torch`. Place the
+data splits in the repository root:
 
 ```
 train_data.h5  val_data.h5  test_data.h5

@@ -4,7 +4,8 @@
     python run_seg.py --data val_data.h5 --n 300 --gt-types --tag oracle_types   # perfect classifier
     python run_seg.py --data test_data.h5 --n 0 --ckpt checkpoints/typeseg/best.pt --tag test
 
-Network inference runs in the main process (MPS/CUDA if available); grouping
+Defaults (prior power 0.5, 10 smoothing iterations, hybrid grouping) were
+tuned on 500 val shapes. Network inference runs in the main process (MPS/CUDA if available); grouping
 and fitting run in --workers processes. Every GroupConfig field is a flag.
 Besides the primitive metrics it reports per-point type accuracy and IoU of
 the network on the full 10k-point clouds.
@@ -51,13 +52,13 @@ def parse_args():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", default="val_data.h5")
     ap.add_argument("--n", type=int, default=300, help="random subset size, 0 for the whole split")
-    ap.add_argument("--ckpt", default="checkpoints/typeseg/best.pt")
+    ap.add_argument("--ckpt", default="checkpoints/typeseg_geo2/best.pt")
     ap.add_argument("--gt-types", action="store_true", help="use ground-truth types instead of the network")
     ap.add_argument("--passes", type=int, default=2, help="inference passes over random splits, averaged")
-    ap.add_argument("--prior-power", type=float, default=0.0,
+    ap.add_argument("--prior-power", type=float, default=0.5,
                     help="predict argmax(p / freq^a): a > 0 favors rare classes")
     ap.add_argument("--probs-cache", default=None, help="pickle of network probabilities to reuse or create")
-    ap.add_argument("--smooth-iters", type=int, default=0, help="edge-aware probability smoothing iterations")
+    ap.add_argument("--smooth-iters", type=int, default=10, help="edge-aware probability smoothing iterations")
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--min-gt-points", type=int, default=DEFAULT_MIN_GT_POINTS)
     ap.add_argument("--viz", type=int, default=6)

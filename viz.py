@@ -27,9 +27,11 @@ def plot_panels(points, panels, path, max_points=5000, seed=0):
     """Save side-by-side views of one cloud; panels is a list of (colors (N,3), title)."""
     idx = np.random.default_rng(seed).permutation(len(points))[:max_points]
     pts = points[idx]
-    fig = plt.figure(figsize=(5 * len(panels), 5))
+    cols = min(len(panels), 4) if len(panels) != 6 else 3
+    rows = int(np.ceil(len(panels) / cols))
+    fig = plt.figure(figsize=(5 * cols, 5 * rows))
     for k, (colors, title) in enumerate(panels):
-        ax = fig.add_subplot(1, len(panels), k + 1, projection="3d")
+        ax = fig.add_subplot(rows, cols, k + 1, projection="3d")
         ax.scatter(pts[:, 0], pts[:, 1], pts[:, 2], c=colors[idx], s=1.5, depthshade=False)
         ax.set_title(title)
         ax.set_box_aspect((1, 1, 1))

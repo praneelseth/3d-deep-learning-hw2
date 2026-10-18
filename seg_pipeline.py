@@ -40,6 +40,21 @@ class GroupConfig:
     residual_ratio: float = 0.5
 
 
+def smooth_probs(points, normals, probs, iters=5, k=16, max_angle_deg=30.0):
+    """Average class probabilities over each point's neighbors (and itself),
+    `iters` times, ignoring neighbors across a normal discontinuity, so points
+    on one surface converge to a common type instead of a speckle."""
+    if iters <= 0:
+        return probs
+    nbrs = cKDTree(points).query(points, k=k + 1)[1]
+    ok = (normals[nbrs] * normals[:, None]).sum(-1) > np.cos(np.deg2rad(max_angle_deg))
+    w = ok / ok.sum(1, keepdims=True)
+    probs = probs.astype(np.float32)
+    for _ in range(iters):
+        probs = np.einsum("nk,nkc->nc", w, probs[nbrs])
+    return probs
+
+
 def _components(points, normals, idx, radius, max_angle_deg):
     pairs = cKDTree(points[idx]).query_pairs(radius, output_type="ndarray")
     cos = (normals[idx[pairs[:, 0]]] * normals[idx[pairs[:, 1]]]).sum(1)

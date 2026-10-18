@@ -25,7 +25,7 @@ from data import ABCParts
 from metrics import DEFAULT_MIN_GT_POINTS, MetricAccumulator, evaluate_shape, format_summary
 from primitives import BACKGROUND, TYPE_NAMES
 from seg_model import TypeSegNet, predict_type_probs
-from seg_pipeline import GroupConfig, group_and_fit
+from seg_pipeline import GroupConfig, group_and_fit, smooth_probs
 from train_seg import CLASS_FREQ, confusion, seg_scores
 from viz import instance_colors, plot_panels, type_colors
 
@@ -57,6 +57,7 @@ def parse_args():
     ap.add_argument("--prior-power", type=float, default=0.0,
                     help="predict argmax(p / freq^a): a > 0 favors rare classes")
     ap.add_argument("--probs-cache", default=None, help="pickle of network probabilities to reuse or create")
+    ap.add_argument("--smooth-iters", type=int, default=0, help="edge-aware probability smoothing iterations")
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--min-gt-points", type=int, default=DEFAULT_MIN_GT_POINTS)
     ap.add_argument("--viz", type=int, default=6)
@@ -99,8 +100,10 @@ def predict_all(args, ds, indices):
     scale = CLASS_FREQ ** -args.prior_power
     types, conf = {}, torch.zeros(4, 4, dtype=torch.long)
     for i in indices:
-        types[int(i)] = (probs[int(i)].astype(np.float32) * scale).argmax(1)
-        conf += confusion(torch.from_numpy(types[int(i)]), torch.from_numpy(ds[int(i)]["types"]))
+        s = ds[int(i)]
+        p = smooth_probs(s["points"], s["normals"], probs[int(i)], args.smooth_iters)
+        types[int(i)] = (p * scale).argmax(1)
+        conf += confusion(torch.from_numpy(types[int(i)]), torch.from_numpy(s["types"]))
     return types, seg_scores(conf)
 
 
@@ -129,7 +132,7 @@ def main():
 
     summary = acc.summary()
     summary.update(config=asdict(cfg), data=args.data, n=len(indices), gt_types=args.gt_types,
-                   prior_power=args.prior_power,
+                   prior_power=args.prior_power, smooth_iters=args.smooth_iters,
                    ckpt=None if args.gt_types else args.ckpt, point_scores=point_scores,
                    infer_sec_per_shape=infer_sec, group_sec_per_shape=float(np.mean(seconds)),
                    prims_per_shape=float(np.mean(num_prims)), pred_points_on_background=on_bg / max(assigned, 1))

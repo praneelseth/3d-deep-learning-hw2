@@ -82,6 +82,34 @@ def test_metrics_hand_example():
     assert [r["iou"] for r in recs] == [0.0, 0.0] and not any(r["matched"] for r in recs)
 
 
+def sample_cylinder(n=1500, center=np.array([3.0, -2.0, 0.0]), radius=0.5):
+    axis, u, v = _frame(np.array([0.0, 1.0, 1.0]))
+    phi = rng.uniform(0, 2 * np.pi, n)
+    radial = np.cos(phi)[:, None] * u + np.sin(phi)[:, None] * v
+    return center + radius * radial + rng.uniform(-1, 1, (n, 1)) * axis, radial
+
+
+def test_ransac_synthetic_scene():
+    from data import normalize
+    from ransac import detect
+
+    plane, plane_n, _ = sample_plane(3000)
+    sphere, sphere_n, _ = sample_sphere(1500, center=np.array([3.0, 3.0, 0.0]), radius=0.6)
+    cone, cone_n, _ = sample_cone(1500)
+    cyl, cyl_n = sample_cylinder()
+    pts = np.r_[plane, sphere, cone + np.array([-3.0, 0.0, 2.0]), cyl]
+    normals = np.r_[plane_n, sphere_n, cone_n, cyl_n]
+    gt_labels = np.repeat([0, 1, 2, 3], [3000, 1500, 1500, 1500])
+    gt_types = np.repeat([PLANE, SPHERE, CONE, 0], [3000, 1500, 1500, 1500])
+    pts, _, _ = normalize(pts)
+
+    labels, prims = detect(pts, normals)
+    recs = evaluate_shape(pts, gt_labels, gt_types, labels, prims)
+    assert [r["pred_type"] for r in recs] == [PLANE, SPHERE, CONE]
+    assert min(r["iou"] for r in recs) > 0.95
+    assert (labels[gt_labels == 3] >= 0).mean() < 0.05  # the cylinder is not reported
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

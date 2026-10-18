@@ -26,7 +26,7 @@ from metrics import DEFAULT_MIN_GT_POINTS, MetricAccumulator, evaluate_shape, fo
 from primitives import BACKGROUND, TYPE_NAMES
 from seg_model import TypeSegNet, predict_type_probs
 from seg_pipeline import GroupConfig, group_and_fit
-from train_seg import confusion, seg_scores
+from train_seg import CLASS_FREQ, confusion, seg_scores
 from viz import instance_colors, plot_panels, type_colors
 
 _ds = None
@@ -54,30 +54,53 @@ def parse_args():
     ap.add_argument("--ckpt", default="checkpoints/typeseg/best.pt")
     ap.add_argument("--gt-types", action="store_true", help="use ground-truth types instead of the network")
     ap.add_argument("--passes", type=int, default=2, help="inference passes over random splits, averaged")
+    ap.add_argument("--prior-power", type=float, default=0.0,
+                    help="predict argmax(p / freq^a): a > 0 favors rare classes")
+    ap.add_argument("--probs-cache", default=None, help="pickle of network probabilities to reuse or create")
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--min-gt-points", type=int, default=DEFAULT_MIN_GT_POINTS)
     ap.add_argument("--viz", type=int, default=6)
     ap.add_argument("--tag", default="default")
     for f in fields(GroupConfig):
-        ap.add_argument(f"--{f.name}", type=type(f.default), default=f.default)
+        if isinstance(f.default, bool):
+            ap.add_argument(f"--{f.name}", type=lambda s: s.lower() in ("1", "true", "yes"), default=f.default)
+        else:
+            ap.add_argument(f"--{f.name}", type=type(f.default), default=f.default)
     args = ap.parse_args()
     return args, GroupConfig(**{f.name: getattr(args, f.name) for f in fields(GroupConfig)})
 
 
-def predict_all(args, ds, indices):
-    if args.gt_types:
-        return {int(i): ds[int(i)]["types"] for i in indices}, None
+def network_probs(args, ds, indices):
+    if args.probs_cache and os.path.exists(args.probs_cache):
+        with open(args.probs_cache, "rb") as f:
+            cached = pickle.load(f)
+        if all(int(i) in cached for i in indices):
+            return cached
     device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
     ck = torch.load(args.ckpt, map_location=device)
     model = TypeSegNet(features=ck["args"].get("features", "raw")).to(device)
     model.load_state_dict(ck["model"])
     num_points, k = ck["args"]["num_points"], ck["args"]["k"]
-    types, conf = {}, torch.zeros(4, 4, dtype=torch.long)
+    probs = {}
     for i in indices:
         s = ds[int(i)]
-        probs = predict_type_probs(model, s["points"], s["normals"], device, num_points, k, args.passes, seed=int(i))
-        types[int(i)] = probs.argmax(1)
-        conf += confusion(torch.from_numpy(types[int(i)]), torch.from_numpy(s["types"]))
+        probs[int(i)] = predict_type_probs(model, s["points"], s["normals"], device, num_points, k, args.passes,
+                                           seed=int(i)).astype(np.float16)
+    if args.probs_cache:
+        with open(args.probs_cache, "wb") as f:
+            pickle.dump(probs, f)
+    return probs
+
+
+def predict_all(args, ds, indices):
+    if args.gt_types:
+        return {int(i): ds[int(i)]["types"] for i in indices}, None
+    probs = network_probs(args, ds, indices)
+    scale = CLASS_FREQ ** -args.prior_power
+    types, conf = {}, torch.zeros(4, 4, dtype=torch.long)
+    for i in indices:
+        types[int(i)] = (probs[int(i)].astype(np.float32) * scale).argmax(1)
+        conf += confusion(torch.from_numpy(types[int(i)]), torch.from_numpy(ds[int(i)]["types"]))
     return types, seg_scores(conf)
 
 
@@ -106,6 +129,7 @@ def main():
 
     summary = acc.summary()
     summary.update(config=asdict(cfg), data=args.data, n=len(indices), gt_types=args.gt_types,
+                   prior_power=args.prior_power,
                    ckpt=None if args.gt_types else args.ckpt, point_scores=point_scores,
                    infer_sec_per_shape=infer_sec, group_sec_per_shape=float(np.mean(seconds)),
                    prims_per_shape=float(np.mean(num_prims)), pred_points_on_background=on_bg / max(assigned, 1))

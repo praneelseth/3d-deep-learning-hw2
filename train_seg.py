@@ -60,12 +60,14 @@ def main():
     ap.add_argument("--workers", type=int, default=6)
     ap.add_argument("--features", default="geo2", choices=["raw", "geo", "geo2"])
     ap.add_argument("--weight-power", type=float, default=0.75, help="class weight = freq ** -power")
+    ap.add_argument("--rotation", default="cube", choices=["so3", "cube"])
     ap.add_argument("--resume", action="store_true")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
     device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
 
-    train_ds = TypeSegDataset(args.train, args.num_points, args.k, augment=True, features=args.features)
+    train_ds = TypeSegDataset(args.train, args.num_points, args.k, augment=True, features=args.features,
+                              rotation=args.rotation)
     val_idx = np.random.default_rng(0).permutation(len(TypeSegDataset(args.val).shapes))[: args.val_shapes]
     val_ds = TypeSegDataset(args.val, args.num_points, args.k, augment=False, indices=val_idx, features=args.features)
     sampler = torch.utils.data.RandomSampler(train_ds, replacement=True,

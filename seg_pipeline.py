@@ -11,6 +11,9 @@ Methods, applied separately to each predicted type's points:
   ransac  the RANSAC detector restricted to that type.
   hybrid  cc, then components whose fit is poor (several surfaces merged)
           are re-split with type-restricted RANSAC.
+With recheck, every instance is also least-squares fitted with the other
+two types and switches to one that fits with under residual_ratio times the
+mean residual, correcting per-point type errors at the instance level.
 """
 from dataclasses import dataclass, replace
 
@@ -20,7 +23,7 @@ from scipy.sparse.csgraph import connected_components
 from scipy.spatial import cKDTree
 
 from primitives import CONE, PLANE, SPHERE, fit_primitive
-from ransac import RansacConfig, detect
+from ransac import RansacConfig, _as_batch, _plausible, detect
 
 
 @dataclass
@@ -33,6 +36,8 @@ class GroupConfig:
     fit_iters: int = 3
     trim_eps: float = 0.01            # farther from the fit -> unassigned
     split_residual: float = 0.002     # hybrid: re-split components with a larger mean residual
+    recheck: bool = True
+    residual_ratio: float = 0.5
 
 
 def _components(points, normals, idx, radius, max_angle_deg):
@@ -57,6 +62,17 @@ def _robust_fit(t, points, normals, idx, cfg):
     return prim, idx[prim.distance(points[idx]) < cfg.trim_eps]
 
 
+def _recheck(prim, pts, nrm, cfg, ransac_cfg):
+    residual = prim.distance(pts).mean()
+    for t in (PLANE, CONE, SPHERE):
+        if t == prim.type_id:
+            continue
+        alt = fit_primitive(t, pts, nrm)
+        if _plausible(t, _as_batch(alt), ransac_cfg)[0] and alt.distance(pts).mean() < cfg.residual_ratio * residual:
+            prim, residual = alt, alt.distance(pts).mean()
+    return prim
+
+
 def group_and_fit(points, normals, types, cfg=GroupConfig(), ransac_cfg=RansacConfig()):
     """types: (N,) predicted type per point. Returns (labels with -1 unassigned, {label: primitive})."""
     labels = np.full(len(points), -1)
@@ -64,6 +80,8 @@ def group_and_fit(points, normals, types, cfg=GroupConfig(), ransac_cfg=RansacCo
     spacing = np.median(cKDTree(points).query(points, k=2)[0][:, 1])
 
     def add(prim, members):
+        if cfg.recheck:
+            prim = _recheck(prim, points[members], normals[members], cfg, ransac_cfg)
         prims[len(prims)] = prim
         labels[members] = len(prims) - 1
 

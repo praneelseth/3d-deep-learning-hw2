@@ -129,13 +129,23 @@ def make_input(points, normals, k, features="raw"):
     return feats, idx.astype(np.int64), idx_wide.astype(np.int64)
 
 
+def random_rotation(rng, mode):
+    """so3: uniform random rotation. cube: one of the 48 axis permutations with
+    sign flips, which keeps the canonical axis alignment of the CAD parts (84%
+    of plane points, but 6% of background, have axis-aligned normals)."""
+    if mode == "so3":
+        return Rotation.random(random_state=rng.integers(1 << 31)).as_matrix()
+    return np.eye(3)[rng.permutation(3)] * rng.choice([-1.0, 1.0], 3)[:, None]
+
+
 class TypeSegDataset(torch.utils.data.Dataset):
     """Random num_points-subsets of shapes; with augment, random rotation and scale."""
 
-    def __init__(self, path, num_points=5000, k=16, augment=True, indices=None, features="raw"):
+    def __init__(self, path, num_points=5000, k=16, augment=True, indices=None, features="raw", rotation="cube"):
         self.shapes = ABCParts(path)
         self.indices = np.arange(len(self.shapes)) if indices is None else np.asarray(indices)
         self.num_points, self.k, self.augment, self.features = num_points, k, augment, features
+        self.rotation = rotation
 
     def __len__(self):
         return len(self.indices)
@@ -148,7 +158,7 @@ class TypeSegDataset(torch.utils.data.Dataset):
         sel = rng.choice(len(s["points"]), self.num_points, replace=False)
         pts, nrm = s["points"][sel], s["normals"][sel]
         if self.augment:
-            R = Rotation.random(random_state=rng.integers(1 << 31)).as_matrix()
+            R = random_rotation(rng, self.rotation)
             pts = pts @ R.T * rng.uniform(0.85, 1.15)
             nrm = nrm @ R.T
         feats, idx, idx_wide = make_input(pts, nrm, self.k, self.features)

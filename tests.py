@@ -135,12 +135,27 @@ def test_type_seg_net_shapes():
     from seg_model import NUM_CLASSES, TypeSegNet, make_input, predict_type_probs
 
     pts, normals, _, _ = _synthetic_scene()
-    model = TypeSegNet().eval()
-    feats, idx = make_input(pts[:500], normals[:500], k=8)
-    logits = model(torch.from_numpy(feats)[None], torch.from_numpy(idx)[None])
-    assert logits.shape == (1, NUM_CLASSES, 500)
-    probs = predict_type_probs(model, pts, normals, torch.device("cpu"), num_points=2500, k=8, passes=1)
-    assert probs.shape == (len(pts), NUM_CLASSES) and np.allclose(probs.sum(1), 1, atol=1e-5)
+    for features in ("raw", "geo", "geo2"):
+        model = TypeSegNet(features=features).eval()
+        inputs = make_input(pts[:500], normals[:500], 8, features)
+        logits = model(*(torch.from_numpy(a)[None] for a in inputs))
+        assert logits.shape == (1, NUM_CLASSES, 500)
+        probs = predict_type_probs(model, pts, normals, torch.device("cpu"), num_points=2500, k=8, passes=1)
+        assert probs.shape == (len(pts), NUM_CLASSES) and np.allclose(probs.sum(1), 1, atol=1e-5)
+
+
+def test_principal_curvatures():
+    from scipy.spatial import cKDTree
+
+    from seg_model import principal_curvatures
+
+    for sample, expected in [(lambda: sample_plane(2000), (0, 0)),
+                             (lambda: sample_sphere(4000, radius=0.5), (2, 2)),
+                             (lambda: (*sample_cylinder(4000, radius=0.25), None), (4, 0))]:
+        pts, normals, _ = sample()
+        idx = cKDTree(pts).query(pts, k=17)[1][:, 1:]
+        curv = np.median(np.abs(principal_curvatures(pts, normals, idx)), axis=0)
+        assert np.allclose(curv, expected, atol=0.1), (expected, curv)
 
 
 if __name__ == "__main__":

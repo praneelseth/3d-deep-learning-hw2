@@ -69,7 +69,7 @@ def predict_all(args, ds, indices):
         return {int(i): ds[int(i)]["types"] for i in indices}, None
     device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
     ck = torch.load(args.ckpt, map_location=device)
-    model = TypeSegNet().to(device)
+    model = TypeSegNet(features=ck["args"].get("features", "raw")).to(device)
     model.load_state_dict(ck["model"])
     num_points, k = ck["args"]["num_points"], ck["args"]["k"]
     types, conf = {}, torch.zeros(4, 4, dtype=torch.long)

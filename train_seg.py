@@ -39,8 +39,8 @@ def seg_scores(conf):
 def validate(model, loader, device):
     model.eval()
     conf = torch.zeros(NUM_CLASSES, NUM_CLASSES, dtype=torch.long)
-    for feats, idx, y in loader:
-        pred = model(feats.to(device), idx.to(device)).argmax(1).cpu()
+    for feats, idx, idx_wide, y in loader:
+        pred = model(feats.to(device), idx.to(device), idx_wide.to(device)).argmax(1).cpu()
         conf += confusion(pred.flatten(), y.flatten())
     return seg_scores(conf)
 
@@ -58,25 +58,27 @@ def main():
     ap.add_argument("--k", type=int, default=16)
     ap.add_argument("--val-shapes", type=int, default=300)
     ap.add_argument("--workers", type=int, default=6)
+    ap.add_argument("--features", default="geo2", choices=["raw", "geo", "geo2"])
+    ap.add_argument("--weight-power", type=float, default=0.75, help="class weight = freq ** -power")
     ap.add_argument("--resume", action="store_true")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
     device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
 
-    train_ds = TypeSegDataset(args.train, args.num_points, args.k, augment=True)
+    train_ds = TypeSegDataset(args.train, args.num_points, args.k, augment=True, features=args.features)
     val_idx = np.random.default_rng(0).permutation(len(TypeSegDataset(args.val).shapes))[: args.val_shapes]
-    val_ds = TypeSegDataset(args.val, args.num_points, args.k, augment=False, indices=val_idx)
+    val_ds = TypeSegDataset(args.val, args.num_points, args.k, augment=False, indices=val_idx, features=args.features)
     sampler = torch.utils.data.RandomSampler(train_ds, replacement=True,
                                              num_samples=args.steps_per_epoch * args.batch_size)
     train_loader = torch.utils.data.DataLoader(train_ds, args.batch_size, sampler=sampler, drop_last=True,
                                                num_workers=args.workers, persistent_workers=True)
     val_loader = torch.utils.data.DataLoader(val_ds, args.batch_size, num_workers=args.workers)
 
-    model = TypeSegNet().to(device)
+    model = TypeSegNet(features=args.features).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=args.lr, total_steps=args.epochs * args.steps_per_epoch,
                                                 pct_start=0.05)
-    weights = 1 / np.sqrt(CLASS_FREQ)
+    weights = CLASS_FREQ ** -args.weight_power
     weights = torch.tensor(weights / weights.mean(), dtype=torch.float32, device=device)
     start, best, history = 0, -1.0, []
     if args.resume and os.path.exists(os.path.join(args.out, "last.pt")):
@@ -90,9 +92,9 @@ def main():
         model.train()
         t0, losses = time.time(), []
         conf = torch.zeros(NUM_CLASSES, NUM_CLASSES, dtype=torch.long)
-        for feats, idx, y in train_loader:
-            feats, idx, y = feats.to(device), idx.to(device), y.to(device)
-            logits = model(feats, idx)
+        for feats, idx, idx_wide, y in train_loader:
+            feats, idx, idx_wide, y = feats.to(device), idx.to(device), idx_wide.to(device), y.to(device)
+            logits = model(feats, idx, idx_wide)
             loss = F.cross_entropy(logits, y, weight=weights)
             opt.zero_grad()
             loss.backward()

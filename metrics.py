@@ -14,6 +14,9 @@ Predicted and ground-truth instances are matched one-to-one by maximum IoU
     Residual: mean distance from a matched ground-truth instance's points to
               its predicted surface, averaged over matched instances
               (normalized units, i.e. the shape fits in the unit sphere)
+The residual mean is dominated by a few spurious low-IoU matches (a ground
+truth surface paired with a sliver of prediction on another surface), so the
+summary also gives its median and its mean over matches with IoU >= 0.5.
 """
 import numpy as np
 from scipy.optimize import linear_sum_assignment
@@ -87,6 +90,8 @@ class MetricAccumulator:
             "seg_iou": float(np.mean([np.mean([r["iou"] for r in s]) for s in self.shapes])),
             "type_acc": float(np.mean([r["pred_type"] == r["gt_type"] for r in matched])) if matched else np.nan,
             "residual": float(np.mean([r["residual"] for r in matched])) if matched else np.nan,
+            "residual_median": float(np.median([r["residual"] for r in matched])) if matched else np.nan,
+            "residual_iou50": float(np.mean([r["residual"] for r in matched if r["iou"] >= 0.5] or [np.nan])),
             "match_rate": len(matched) / max(len(recs), 1),
             "per_type": {},
         }
@@ -104,7 +109,8 @@ class MetricAccumulator:
 
 def format_summary(s):
     lines = [f"shapes={s['num_shapes']}  instances={s['num_instances']}  matched={s['match_rate']:.1%}",
-             f"Seg-IoU={s['seg_iou']:.4f}  TypeAcc={s['type_acc']:.4f}  Residual={s['residual']:.2e}",
+             f"Seg-IoU={s['seg_iou']:.4f}  TypeAcc={s['type_acc']:.4f}  Residual={s['residual']:.2e}"
+             f"  (median {s['residual_median']:.2e}, IoU>=0.5 {s['residual_iou50']:.2e})",
              f"{'type':<8}{'count':>8}{'IoU':>10}{'TypeAcc':>10}{'Residual':>12}"]
     for name, v in s["per_type"].items():
         lines.append(f"{name:<8}{v['count']:>8}{v['iou']:>10.4f}{v['type_acc']:>10.4f}{v['residual']:>12.2e}")

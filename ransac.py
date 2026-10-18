@@ -191,7 +191,7 @@ def _refine(t, prim, rem_idx, points, normals, cfg, radius):
 def detect(points, normals, cfg=RansacConfig()):
     """Returns (labels (N,) with -1 for unassigned, {label: primitive})."""
     rng = np.random.default_rng(cfg.seed)
-    nn_dist, nbrs = cKDTree(points).query(points, k=cfg.neighborhood + 1)
+    nn_dist, nbrs = cKDTree(points).query(points, k=min(cfg.neighborhood + 1, len(points)))
     radius = cfg.conn_scale * np.median(nn_dist[:, 1])
     labels = np.full(len(points), -1)
     prims = {}

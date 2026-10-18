@@ -26,15 +26,16 @@ def sample_sphere(n=500, center=np.array([0.1, -0.2, 0.3]), radius=0.7):
     return center + radius * d, d, Sphere(center, radius)
 
 
-def sample_cone(n=800):
+def sample_cone(n=800, flip=True):
     apex, angle = np.array([0.2, 0.1, -0.4]), np.deg2rad(25)
     axis, u, v = _frame(np.array([0.3, -0.5, 0.8]))
-    t = rng.uniform(0.2, 1.0, n)
+    t = np.sqrt(rng.uniform(0.2 ** 2, 1.0, n))  # uniform density over the surface
     phi = rng.uniform(0, 1.5 * np.pi, n)
     radial = np.cos(phi)[:, None] * u + np.sin(phi)[:, None] * v
     pts = apex + t[:, None] * (np.cos(angle) * axis + np.sin(angle) * radial)
     normals = np.cos(angle) * radial - np.sin(angle) * axis
-    normals *= rng.choice([-1, 1], (n, 1))  # fitting must not depend on normal orientation
+    if flip:
+        normals *= rng.choice([-1, 1], (n, 1))  # fitting must not depend on normal orientation
     return pts, normals, Cone(apex, axis, angle)
 
 
@@ -89,25 +90,57 @@ def sample_cylinder(n=1500, center=np.array([3.0, -2.0, 0.0]), radius=0.5):
     return center + radius * radial + rng.uniform(-1, 1, (n, 1)) * axis, radial
 
 
-def test_ransac_synthetic_scene():
+def _synthetic_scene():
+    """Plane, sphere, cone and a distractor cylinder at roughly equal point density
+    with consistently oriented normals, like the real data."""
     from data import normalize
-    from ransac import detect
 
-    plane, plane_n, _ = sample_plane(3000)
-    sphere, sphere_n, _ = sample_sphere(1500, center=np.array([3.0, 3.0, 0.0]), radius=0.6)
-    cone, cone_n, _ = sample_cone(1500)
-    cyl, cyl_n = sample_cylinder()
+    counts = [3000, 3400, 700, 4700]
+    plane, plane_n, _ = sample_plane(counts[0])
+    sphere, sphere_n, _ = sample_sphere(counts[1], center=np.array([3.0, 3.0, 0.0]), radius=0.6)
+    cone, cone_n, _ = sample_cone(counts[2], flip=False)
+    cyl, cyl_n = sample_cylinder(counts[3])
     pts = np.r_[plane, sphere, cone + np.array([-3.0, 0.0, 2.0]), cyl]
     normals = np.r_[plane_n, sphere_n, cone_n, cyl_n]
-    gt_labels = np.repeat([0, 1, 2, 3], [3000, 1500, 1500, 1500])
-    gt_types = np.repeat([PLANE, SPHERE, CONE, 0], [3000, 1500, 1500, 1500])
-    pts, _, _ = normalize(pts)
+    gt_labels = np.repeat([0, 1, 2, 3], counts)
+    gt_types = np.repeat([PLANE, SPHERE, CONE, 0], counts)
+    return normalize(pts)[0], normals, gt_labels, gt_types
 
+
+def test_ransac_synthetic_scene():
+    from ransac import detect
+
+    pts, normals, gt_labels, gt_types = _synthetic_scene()
     labels, prims = detect(pts, normals)
     recs = evaluate_shape(pts, gt_labels, gt_types, labels, prims)
     assert [r["pred_type"] for r in recs] == [PLANE, SPHERE, CONE]
     assert min(r["iou"] for r in recs) > 0.95
     assert (labels[gt_labels == 3] >= 0).mean() < 0.05  # the cylinder is not reported
+
+
+def test_group_and_fit_with_true_types():
+    from seg_pipeline import GroupConfig, group_and_fit
+
+    pts, normals, gt_labels, gt_types = _synthetic_scene()
+    for method in ("cc", "ransac", "hybrid"):
+        labels, prims = group_and_fit(pts, normals, gt_types, GroupConfig(method=method))
+        recs = evaluate_shape(pts, gt_labels, gt_types, labels, prims)
+        assert [r["pred_type"] for r in recs] == [PLANE, SPHERE, CONE], method
+        assert min(r["iou"] for r in recs) > 0.95, method
+
+
+def test_type_seg_net_shapes():
+    import torch
+
+    from seg_model import NUM_CLASSES, TypeSegNet, make_input, predict_type_probs
+
+    pts, normals, _, _ = _synthetic_scene()
+    model = TypeSegNet().eval()
+    feats, idx = make_input(pts[:500], normals[:500], k=8)
+    logits = model(torch.from_numpy(feats)[None], torch.from_numpy(idx)[None])
+    assert logits.shape == (1, NUM_CLASSES, 500)
+    probs = predict_type_probs(model, pts, normals, torch.device("cpu"), num_points=2500, k=8, passes=1)
+    assert probs.shape == (len(pts), NUM_CLASSES) and np.allclose(probs.sum(1), 1, atol=1e-5)
 
 
 if __name__ == "__main__":
